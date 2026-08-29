@@ -1,0 +1,69 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-slate-100 text-brand-ink antialiased;
+    font-family: 'Nunito', system-ui, sans-serif;
+  }
+
+  input,
+  select,
+  textarea {
+    @apply outline-none;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl bg-white shadow-card;
+  }
+
+  .field {
+    @apply w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-[15px] focus:border-brand-navy;
+  }
+
+  .label {
+    @apply mb-1 block text-[13px] font-bold text-slate-600;
+  }
+
+  .btn {
+    @apply flex items-center justify-center gap-2 rounded-full px-5 py-3 text-[15px] font-extrabold transition active:scale-[0.98] disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply btn bg-brand-navy text-white;
+  }
+
+  .btn-income {
+    @apply btn bg-income text-white;
+  }
+
+  .btn-expense {
+    @apply btn bg-expense text-white;
+  }
+
+  .btn-ghost {
+    @apply btn border border-slate-300 bg-white text-brand-ink;
+  }
+
+  .chip {
+    @apply whitespace-nowrap rounded-full px-3 py-1.5 text-[13px] font-bold;
+  }
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
