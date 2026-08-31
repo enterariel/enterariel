@@ -1,4 +1,5 @@
 export const CURRENCIES: Record<string, { symbol: string; locale: string }> = {
+  PYG: { symbol: '₲', locale: 'es-PY' },
   COP: { symbol: '$', locale: 'es-CO' },
   MXN: { symbol: '$', locale: 'es-MX' },
   USD: { symbol: '$', locale: 'en-US' },
@@ -12,9 +13,11 @@ export function uid(prefix = 'id'): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`
 }
 
-export function formatMoney(value: number, currency = 'COP'): string {
-  const conf = CURRENCIES[currency] ?? CURRENCIES.COP
-  const decimals = currency === 'COP' || currency === 'CLP' ? 0 : 2
+const ZERO_DECIMAL_CURRENCIES = ['PYG', 'COP', 'CLP']
+
+export function formatMoney(value: number, currency = 'PYG'): string {
+  const conf = CURRENCIES[currency] ?? CURRENCIES.PYG
+  const decimals = ZERO_DECIMAL_CURRENCIES.includes(currency) ? 0 : 2
   const amount = Math.abs(value).toLocaleString(conf.locale, {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
@@ -77,7 +80,7 @@ export function monthTitle(date: Date): string {
 }
 
 export function timeLabel(iso: string): string {
-  return new Date(iso).toLocaleTimeString('es-CO', {
+  return new Date(iso).toLocaleTimeString('es-PY', {
     hour: 'numeric',
     minute: '2-digit',
     hour12: true,

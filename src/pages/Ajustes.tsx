@@ -12,7 +12,7 @@ export function Ajustes() {
   const [owner, setOwner] = useState(business?.owner ?? '')
   const [phone, setPhone] = useState(business?.phone ?? '')
   const [category, setCategory] = useState(business?.category ?? '')
-  const [currency, setCurrency] = useState(business?.currency ?? 'COP')
+  const [currency, setCurrency] = useState(business?.currency ?? 'PYG')
   const [saved, setSaved] = useState(false)
 
   return (

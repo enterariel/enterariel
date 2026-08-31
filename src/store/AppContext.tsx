@@ -57,7 +57,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [state])
 
   const value = useMemo<AppContextValue>(() => {
-    const currency = state.business?.currency ?? 'COP'
+    const currency = state.business?.currency ?? 'PYG'
 
     const applyStock = (products: Product[], items: Sale['items'], sign: number) =>
       products.map((product) => {

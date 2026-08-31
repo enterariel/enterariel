@@ -3,6 +3,7 @@ import { useApp } from '../store/AppContext'
 import { CURRENCIES } from '../lib/utils'
 
 const COUNTRIES: Record<string, string> = {
+  Paraguay: 'PYG',
   Colombia: 'COP',
   México: 'MXN',
   Perú: 'PEN',
@@ -17,8 +18,8 @@ export function Onboarding() {
   const [step, setStep] = useState(0)
   const [name, setName] = useState('')
   const [owner, setOwner] = useState('')
-  const [country, setCountry] = useState('Colombia')
-  const currency = COUNTRIES[country] ?? 'COP'
+  const [country, setCountry] = useState('Paraguay')
+  const currency = COUNTRIES[country] ?? 'PYG'
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-md flex-col bg-brand-yellow">
