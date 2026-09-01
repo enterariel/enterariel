@@ -1,0 +1,100 @@
+const db = require('../db');
+const config = require('../lib/config');
+const { noAutorizado, prohibido } = require('../lib/errors');
+
+const COOKIE = 'sid';
+
+// Login obligatorio para toda la API salvo login y health-check.
+async function sesionActual(req) {
+  const token = req.cookies ? req.cookies[COOKIE] : null;
+  if (!token) return null;
+
+  const sesion = await db.uno(
+    `SELECT s.*, u.usuario, u.nombre, u.rol, u.activo
+       FROM sesiones s JOIN usuarios u ON u.id = s.usuario_id
+      WHERE s.token = ? AND s.cerrada = 0`,
+    [token]
+  );
+  if (!sesion || !sesion.activo) return null;
+
+  const ahora = Date.now();
+  if (new Date(sesion.expira_en).getTime() < ahora) {
+    await db.ejecutar('UPDATE sesiones SET cerrada = 1 WHERE token = ?', [token]);
+    return null;
+  }
+
+  // Cierre por inactividad, aunque no haya vencido el limite absoluto.
+  const minutos = Number(await config.obtener('inactividad_minutos'));
+  const inactivo = ahora - new Date(sesion.ultima_actividad).getTime();
+  if (minutos > 0 && inactivo > minutos * 60 * 1000) {
+    await db.ejecutar('UPDATE sesiones SET cerrada = 1 WHERE token = ?', [token]);
+    return null;
+  }
+
+  await db.ejecutar('UPDATE sesiones SET ultima_actividad = NOW() WHERE token = ?', [token]);
+  const menus = await db.query('SELECT menu FROM usuario_menus WHERE usuario_id = ?', [sesion.usuario_id]);
+  return {
+    id: sesion.usuario_id,
+    usuario: sesion.usuario,
+    nombre: sesion.nombre,
+    rol: sesion.rol,
+    menus: menus.map((m) => m.menu),
+    token,
+  };
+}
+
+async function requiereSesion(req, res, next) {
+  try {
+    const usuario = await sesionActual(req);
+    if (!usuario) return next(noAutorizado());
+    req.usuario = usuario;
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Los menus no son decorativos: la API rechaza el area que el usuario no tiene
+// asignada. Cada area lista los menus que la habilitan, porque una pantalla usa
+// datos de varias (el mostrador necesita catalogo, clientes y caja).
+const MENUS_POR_AREA = {
+  usuarios: ['usuarios'],
+  config: ['config'],
+  timbrados: ['config', 'ventas', 'pos'],
+  catalogo: ['catalogo', 'pos', 'stock', 'compras', 'presupuestos', 'ventas'],
+  stock: ['stock', 'catalogo'],
+  clientes: ['clientes', 'creditos', 'pos', 'ventas', 'presupuestos'],
+  proveedores: ['proveedores', 'compras'],
+  ventas: ['ventas', 'pos'],
+  compras: ['compras'],
+  caja: ['caja', 'pos'],
+  gastos: ['gastos'],
+  presupuestos: ['presupuestos', 'pos'],
+  reportes: ['reportes', 'tablero', 'creditos'],
+  tablero: ['tablero'],
+};
+
+function requiereMenu(req, res, next) {
+  if (!req.usuario) return next(noAutorizado());
+  if (req.usuario.rol === 'admin') return next();
+
+  const area = req.path.split('/')[1];
+  const habilitan = MENUS_POR_AREA[area];
+  if (!habilitan) return next();
+  // La configuracion del negocio se lee desde cualquier pantalla.
+  if (area === 'config' && req.method === 'GET' && req.path === '/') return next();
+  if (habilitan.some((m) => req.usuario.menus.includes(m))) return next();
+  next(prohibido('No tenes permiso para esta seccion'));
+}
+
+function requiereRol(...roles) {
+  return (req, res, next) => {
+    if (!req.usuario) return next(noAutorizado());
+    if (!roles.includes(req.usuario.rol)) return next(prohibido());
+    next();
+  };
+}
+
+const soloAdmin = requiereRol('admin');
+
+module.exports = { COOKIE, sesionActual, requiereSesion, requiereMenu, requiereRol, soloAdmin };

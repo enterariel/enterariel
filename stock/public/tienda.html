@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Catálogo</title>
+  <link rel="stylesheet" href="/css/estilos.css">
+</head>
+<body class="tienda">
+  <header class="tienda-cabecera">
+    <h1 id="negocio">Catálogo</h1>
+    <input id="buscar" placeholder="Buscar producto">
+  </header>
+  <main id="grilla" class="tienda-grilla"></main>
+  <p id="mensaje" class="desglose"></p>
+
+  <script type="module">
+    import { el, gs } from '/js/ui.js';
+
+    const grilla = document.getElementById('grilla');
+    const mensaje = document.getElementById('mensaje');
+    let whatsapp = '';
+
+    // Solo se muestran fotos servidas por http(s): un `javascript:` u otro
+    // esquema cargado desde el catalogo no debe llegar al navegador del cliente.
+    function fotoSegura(url) {
+      try {
+        const destino = new URL(url, window.location.origin);
+        return destino.protocol === 'http:' || destino.protocol === 'https:' ? destino.href : null;
+      } catch {
+        return null;
+      }
+    }
+
+    async function cargar(q = '') {
+      grilla.textContent = '';
+      let datos;
+      try {
+        const respuesta = await fetch(`/api/tienda?q=${encodeURIComponent(q)}`);
+        datos = await respuesta.json();
+        if (!respuesta.ok) throw new Error(datos.error || 'No disponible');
+      } catch (err) {
+        mensaje.textContent = err.message;
+        return;
+      }
+      document.getElementById('negocio').textContent = datos.negocio.nombre;
+      whatsapp = datos.negocio.whatsapp || datos.negocio.telefono || '';
+      mensaje.textContent = datos.productos.length
+        ? 'Los precios son de referencia. El pedido se cierra por WhatsApp.'
+        : 'No hay productos publicados por ahora.';
+      for (const p of datos.productos) {
+        grilla.appendChild(el('article', { class: 'tienda-item' }, [
+          fotoSegura(p.foto_url) ? el('img', { src: fotoSegura(p.foto_url), alt: p.nombre }) : null,
+          el('h3', { text: p.nombre }),
+          el('small', { text: p.categoria || '' }),
+          el('ul', {}, (p.presentaciones || []).map((pr) =>
+            el('li', { text: `${pr.nombre} (x${pr.factor}) — ${gs(pr.precio)}` })
+          )),
+          whatsapp
+            ? el('a', {
+                class: 'primario',
+                target: '_blank',
+                rel: 'noopener',
+                href: `https://wa.me/${whatsapp.replace(/\D/g, '')}?text=${encodeURIComponent(`Hola, quiero pedir: ${p.nombre}`)}`,
+                text: 'Pedir por WhatsApp',
+              })
+            : null,
+        ]));
+      }
+    }
+
+    document.getElementById('buscar').addEventListener('input', (ev) => cargar(ev.target.value));
+    cargar();
+  </script>
+</body>
+</html>
