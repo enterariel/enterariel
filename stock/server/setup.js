@@ -1,4 +1,5 @@
 require('dotenv').config();
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const mysql = require('mysql2/promise');
@@ -50,7 +51,11 @@ async function datosBase() {
   const admins = await db.uno("SELECT COUNT(*) AS n FROM usuarios WHERE rol = 'admin'");
   if (Number(admins.n) === 0) {
     const sal = passwords.generarSal();
-    const clave = process.env.ADMIN_PASSWORD || 'admin123';
+    // En produccion no se inventa una clave conocida: o la define el operador
+    // o se genera una al azar y se muestra una sola vez.
+    const enProduccion = process.env.NODE_ENV === 'production';
+    const clave = process.env.ADMIN_PASSWORD
+      || (enProduccion ? crypto.randomBytes(12).toString('base64url') : 'admin123');
     const r = await db.ejecutar(
       'INSERT INTO usuarios (usuario, nombre, rol, pass_hash, salt) VALUES (?, ?, ?, ?, ?)',
       ['admin', 'Administrador', 'admin', passwords.hashear(clave, sal), sal]
@@ -61,6 +66,7 @@ async function datosBase() {
       await db.ejecutar('INSERT IGNORE INTO usuario_menus (usuario_id, menu) VALUES (?, ?)', [r.insertId, menu]);
     }
     console.log(`Usuario admin creado (usuario: admin / contrasena: ${clave})`);
+    if (enProduccion) console.log('Guarda esa contrasena: no se vuelve a mostrar. Cambiala desde Usuarios.');
   }
 }
 

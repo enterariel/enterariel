@@ -27,15 +27,40 @@ async function efectivoDevuelto(conn, ventaId) {
   return Number(filas[0].total);
 }
 
-// Le devuelve plata al cliente: baja la deuda si la venta fue a credito,
-// o sale efectivo de la caja si fue de contado.
+// Deuda viva de esta venta: lo que todavia debe el cliente por ella, ya
+// descontados los pagos que hizo y las devoluciones anteriores.
+async function deudaPendiente(conn, venta) {
+  if (venta.modalidad_credito === 'libreta') {
+    const libreta = await cuenta.libretaAbierta(conn, venta.cliente_id, false);
+    if (!libreta) return 0;
+    const [filas] = await conn.query(
+      'SELECT COALESCE(SUM(cargo) - SUM(abono), 0) AS saldo FROM libreta_movimientos WHERE libreta_id = ?',
+      [libreta.id]
+    );
+    const [propios] = await conn.query(
+      "SELECT COALESCE(SUM(cargo) - SUM(abono), 0) AS saldo FROM libreta_movimientos WHERE libreta_id = ? AND referencia_tipo = 'venta' AND referencia_id = ?",
+      [libreta.id, venta.id]
+    );
+    // Los pagos de libreta no se imputan a una venta puntual: se topea contra
+    // el saldo de la libreta para no acreditar mas de lo que se debe.
+    return Math.max(0, Math.min(Number(filas[0].saldo), Number(propios[0].saldo)));
+  }
+  const [filas] = await conn.query(
+    "SELECT COALESCE(SUM(monto - pagado), 0) AS saldo FROM cuotas WHERE venta_id = ? AND estado = 'pendiente'",
+    [venta.id]
+  );
+  return Math.max(0, Number(filas[0].saldo));
+}
+
+// Le devuelve plata al cliente: baja la deuda viva si la venta fue a credito y
+// el resto sale por el mismo medio con que pago (efectivo, de la caja).
 async function acreditar(conn, venta, monto, concepto, usuario, cajaId) {
   const importe = gs(monto);
   if (importe <= 0) return { acreditado: 0 };
+  const enEfectivoLaVenta = venta.medio_pago === 'efectivo' || venta.medio_pago === 'mixto';
 
   if (venta.condicion === 'credito') {
-    const yaAcreditado = await acreditadoPrevio(conn, venta);
-    const pendiente = Math.max(0, Number(venta.financiado) - yaAcreditado);
+    const pendiente = await deudaPendiente(conn, venta);
     const aAcreditar = Math.min(importe, pendiente);
     const enEfectivo = importe - aAcreditar;
 
@@ -81,24 +106,26 @@ async function acreditar(conn, venta, monto, concepto, usuario, cajaId) {
       });
     }
 
-    if (enEfectivo > 0 && cajaId) {
+    if (enEfectivo > 0 && cajaId && enEfectivoLaVenta) {
       await conn.query(
         `INSERT INTO caja_movimientos (caja_id, tipo, monto, referencia_tipo, referencia_id, detalle, usuario_id)
          VALUES (?, 'devolucion', ?, 'venta', ?, ?, ?)`,
         [cajaId, enEfectivo, venta.id, concepto, usuario.id]
       );
     }
-    return { acreditado: aAcreditar, efectivo: enEfectivo };
+    return { acreditado: aAcreditar, efectivo: enEfectivoLaVenta ? enEfectivo : 0, medio: venta.medio_pago };
   }
 
-  if (cajaId) {
+  // Si la venta se cobro con tarjeta o transferencia la devolucion se hace por
+  // ese mismo medio: no puede salir plata de la caja.
+  if (cajaId && enEfectivoLaVenta) {
     await conn.query(
       `INSERT INTO caja_movimientos (caja_id, tipo, monto, referencia_tipo, referencia_id, detalle, usuario_id)
        VALUES (?, 'devolucion', ?, 'venta', ?, ?, ?)`,
       [cajaId, importe, venta.id, concepto, usuario.id]
     );
   }
-  return { acreditado: 0, efectivo: importe };
+  return { acreditado: 0, efectivo: enEfectivoLaVenta ? importe : 0, medio: venta.medio_pago };
 }
 
 // El vendedor puede tocar su propia venta el mismo dia; despues, solo admin.
@@ -117,17 +144,34 @@ async function devolverParcial(conn, venta, items, motivo, usuario, cajaId) {
   const [ventaItems] = await conn.query('SELECT * FROM venta_items WHERE venta_id = ? FOR UPDATE', [venta.id]);
   const porId = new Map(ventaItems.map((i) => [Number(i.id), i]));
 
-  const aDevolver = [];
+  // Se suman las cantidades por linea antes de validar: si el pedido repite una
+  // linea, el total no puede pasarse de lo vendido.
+  const pedido = new Map();
   for (const item of items) {
-    const original = porId.get(Number(item.venta_item_id));
-    if (!original) throw malPedido('La linea no pertenece a esta venta');
+    const id = Number(item.venta_item_id);
     const cantidad = Math.trunc(Number(item.cantidad));
+    if (!Number.isFinite(cantidad) || cantidad <= 0) throw malPedido('Cantidad de devolucion invalida');
+    pedido.set(id, (pedido.get(id) || 0) + cantidad);
+  }
+
+  // El descuento de la venta se reparte proporcionalmente entre las lineas para
+  // no devolver mas de lo que el cliente pago.
+  const subtotal = Number(venta.subtotal) || 0;
+  const proporcion = subtotal > 0 ? (subtotal - Number(venta.descuento)) / subtotal : 1;
+
+  const aDevolver = [];
+  for (const [id, cantidad] of pedido) {
+    const original = porId.get(id);
+    if (!original) throw malPedido('La linea no pertenece a esta venta');
     const disponible = Number(original.cantidad) - Number(original.devuelto);
-    if (cantidad <= 0) throw malPedido('Cantidad de devolucion invalida');
     if (cantidad > disponible) {
       throw malPedido(`No se puede devolver ${cantidad} de ${original.producto_nombre}: quedan ${disponible}`);
     }
-    aDevolver.push({ original, cantidad, importe: gs(Number(original.precio_unitario) * cantidad) });
+    aDevolver.push({
+      original,
+      cantidad,
+      importe: gs(Number(original.precio_unitario) * cantidad * proporcion),
+    });
   }
 
   const total = aDevolver.reduce((acc, d) => acc + d.importe, 0);
@@ -183,14 +227,13 @@ async function anular(conn, venta, motivo, usuario, cajaId) {
 
   let credito = { acreditado: 0, efectivo: 0 };
   if (venta.condicion === 'credito') {
-    const yaAcreditado = await acreditadoPrevio(conn, venta);
-    const pendienteDeuda = Math.max(0, Number(venta.financiado) - yaAcreditado);
+    const pendienteDeuda = await deudaPendiente(conn, venta);
     if (pendienteDeuda > 0) {
       credito = await acreditar(conn, venta, pendienteDeuda, `Anulacion venta ${venta.numero}`, usuario, cajaId);
     }
     await conn.query("UPDATE cuotas SET estado = 'anulada' WHERE venta_id = ? AND estado = 'pendiente'", [venta.id]);
     // La entrega inicial que hizo el cliente vuelve en efectivo.
-    if (Number(venta.entrega_inicial) > 0 && cajaId) {
+    if (Number(venta.entrega_inicial) > 0 && cajaId && venta.medio_pago !== 'transferencia' && venta.medio_pago !== 'tarjeta') {
       await conn.query(
         `INSERT INTO caja_movimientos (caja_id, tipo, monto, referencia_tipo, referencia_id, detalle, usuario_id)
          VALUES (?, 'devolucion', ?, 'venta', ?, ?, ?)`,
@@ -214,4 +257,4 @@ async function anular(conn, venta, motivo, usuario, cajaId) {
   return { anulada: true, ...credito };
 }
 
-module.exports = { devolverParcial, anular, verificarPermiso, acreditadoPrevio };
+module.exports = { devolverParcial, anular, verificarPermiso, acreditadoPrevio, deudaPendiente };

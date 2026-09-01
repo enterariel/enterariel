@@ -54,6 +54,39 @@ async function requiereSesion(req, res, next) {
   }
 }
 
+// Los menus no son decorativos: la API rechaza el area que el usuario no tiene
+// asignada. Cada area lista los menus que la habilitan, porque una pantalla usa
+// datos de varias (el mostrador necesita catalogo, clientes y caja).
+const MENUS_POR_AREA = {
+  usuarios: ['usuarios'],
+  config: ['config'],
+  timbrados: ['config', 'ventas', 'pos'],
+  catalogo: ['catalogo', 'pos', 'stock', 'compras', 'presupuestos', 'ventas'],
+  stock: ['stock', 'catalogo'],
+  clientes: ['clientes', 'creditos', 'pos', 'ventas', 'presupuestos'],
+  proveedores: ['proveedores', 'compras'],
+  ventas: ['ventas', 'pos'],
+  compras: ['compras'],
+  caja: ['caja', 'pos'],
+  gastos: ['gastos'],
+  presupuestos: ['presupuestos', 'pos'],
+  reportes: ['reportes', 'tablero', 'creditos'],
+  tablero: ['tablero'],
+};
+
+function requiereMenu(req, res, next) {
+  if (!req.usuario) return next(noAutorizado());
+  if (req.usuario.rol === 'admin') return next();
+
+  const area = req.path.split('/')[1];
+  const habilitan = MENUS_POR_AREA[area];
+  if (!habilitan) return next();
+  // La configuracion del negocio se lee desde cualquier pantalla.
+  if (area === 'config' && req.method === 'GET' && req.path === '/') return next();
+  if (habilitan.some((m) => req.usuario.menus.includes(m))) return next();
+  next(prohibido('No tenes permiso para esta seccion'));
+}
+
 function requiereRol(...roles) {
   return (req, res, next) => {
     if (!req.usuario) return next(noAutorizado());
@@ -64,4 +97,4 @@ function requiereRol(...roles) {
 
 const soloAdmin = requiereRol('admin');
 
-module.exports = { COOKIE, sesionActual, requiereSesion, requiereRol, soloAdmin };
+module.exports = { COOKIE, sesionActual, requiereSesion, requiereMenu, requiereRol, soloAdmin };

@@ -29,4 +29,16 @@ export const api = {
     a.click();
     a.remove();
   },
+  // Descarga el resultado de un POST (backup) como archivo local.
+  async descargarPost(ruta, nombre) {
+    const datos = await pedir('POST', ruta, {});
+    const url = URL.createObjectURL(new Blob([JSON.stringify(datos, null, 2)], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = nombre || 'descarga.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 };

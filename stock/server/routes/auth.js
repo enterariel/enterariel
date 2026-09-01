@@ -28,11 +28,15 @@ router.post(
     }
 
     if (!passwords.verificar(password, fila.salt, fila.pass_hash)) {
-      const intentos = Number(fila.intentos_fallidos) + 1;
-      const bloquear = enProduccion() && intentos >= INTENTOS_MAX;
+      // El contador se incrementa en la misma sentencia para que intentos en
+      // paralelo no se pisen entre si y esquiven el bloqueo.
       await db.ejecutar(
-        'UPDATE usuarios SET intentos_fallidos = ?, bloqueado_hasta = ? WHERE id = ?',
-        [bloquear ? 0 : intentos, bloquear ? new Date(Date.now() + BLOQUEO_MINUTOS * 60000) : null, fila.id]
+        `UPDATE usuarios
+            SET intentos_fallidos = intentos_fallidos + 1,
+                bloqueado_hasta = CASE WHEN ? AND intentos_fallidos + 1 >= ?
+                                       THEN DATE_ADD(NOW(), INTERVAL ? MINUTE) ELSE bloqueado_hasta END
+          WHERE id = ?`,
+        [enProduccion() ? 1 : 0, INTENTOS_MAX, BLOQUEO_MINUTOS, fila.id]
       );
       throw noAutorizado('Usuario o contrasena incorrectos');
     }
@@ -48,7 +52,7 @@ router.post(
 
     res.cookie(COOKIE, token, {
       httpOnly: true,
-      sameSite: 'lax',
+      sameSite: 'strict',
       secure: enProduccion(),
       maxAge: horas * 3600 * 1000,
     });

@@ -54,8 +54,9 @@ router.put(
   })
 );
 
-// Backup logico: volcado de las tablas de datos en JSON (solo admin).
-router.get(
+// Backup logico: volcado de las tablas de datos en JSON (solo admin). Va por
+// POST para que no se dispare con una simple navegacion desde otro sitio.
+router.post(
   '/backup',
   soloAdmin,
   asyncRuta(async (req, res) => {

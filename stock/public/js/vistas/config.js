@@ -125,7 +125,7 @@ export async function render(contenedor) {
   await pintarTimbrados();
 
   contenedor.appendChild(
-    pagina('Configuración', [boton('Descargar backup', () => api.descargar('/config/backup', 'backup.json'))], [
+    pagina('Configuración', [boton('Descargar backup', () => api.descargarPost('/config/backup', 'backup.json'))], [
       el('div', { class: 'panel' }, [el('h3', { text: 'Negocio y catálogo público' }), negocio.nodo, boton('Guardar', () => guardar(negocio), 'primario')]),
       el('div', { class: 'panel' }, [el('h3', { text: 'Crédito' }), credito.nodo, boton('Guardar', () => guardar(credito), 'primario')]),
       el('div', { class: 'panel' }, [tramos]),

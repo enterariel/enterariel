@@ -3,14 +3,37 @@ const path = require('path');
 const express = require('express');
 const cookieParser = require('cookie-parser');
 
-const { requiereSesion } = require('./middleware/auth');
+const { requiereSesion, requiereMenu } = require('./middleware/auth');
 const { ErrorApp } = require('./lib/errors');
 
 const app = express();
 app.disable('x-powered-by');
+app.set('trust proxy', true);
+
+// En produccion se sirve detras de HTTPS: se redirige y se pide HSTS.
+if (process.env.NODE_ENV === 'production') {
+  app.use((req, res, next) => {
+    if (!req.secure) return res.redirect(308, `https://${req.headers.host}${req.originalUrl}`);
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    next();
+  });
+}
 app.use(express.json({ limit: '5mb' }));
 app.use(express.text({ type: 'text/csv', limit: '5mb' }));
 app.use(cookieParser());
+
+// Anti-CSRF: la sesion viaja en cookie, asi que toda mutacion que llegue desde
+// otro sitio se rechaza. Los clientes que no son navegadores no mandan Origin.
+const METODOS_SEGUROS = new Set(['GET', 'HEAD', 'OPTIONS']);
+app.use('/api', (req, res, next) => {
+  if (METODOS_SEGUROS.has(req.method)) return next();
+  const origen = req.headers.origin || req.headers.referer;
+  if (!origen) return next();
+  let host;
+  try { host = new URL(origen).host; } catch { return res.status(403).json({ error: 'Origen invalido' }); }
+  if (host !== req.headers.host) return res.status(403).json({ error: 'Origen no permitido' });
+  next();
+});
 
 app.get('/api/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
 
@@ -18,7 +41,7 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/api/tienda', require('./routes/tienda'));
 
 // Todo lo demas exige sesion.
-app.use('/api', requiereSesion);
+app.use('/api', requiereSesion, requiereMenu);
 app.use('/api/usuarios', require('./routes/usuarios'));
 app.use('/api/config', require('./routes/config'));
 app.use('/api/catalogo', require('./routes/catalogo'));

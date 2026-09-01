@@ -144,11 +144,12 @@ export async function render(contenedor) {
       cliente_id: estado.cliente ? estado.cliente.id : null,
       descuento: t.descuento,
       presupuesto_id: estado.presupuestoId,
-      items: estado.lineas.map((l) => ({ presentacion_id: l.presentacion_id, cantidad: l.cantidad, precio_unitario: l.precio })),
+      items: estado.lineas.map((l) => ({ presentacion_id: l.presentacion_id, cantidad: l.cantidad })),
     });
     aviso(`Venta ${venta.numero} registrada por ${gs(venta.total)}`);
-    const detalle = await api.get(`/ventas/${venta.venta_id}`);
-    imprimir(ticketHtml(detalle));
+
+    // La venta ya esta registrada: se vacia el mostrador antes de imprimir para
+    // que un fallo del ticket no invite a cobrarla de nuevo.
     estado.lineas = [];
     estado.cliente = null;
     estado.descuento = 0;
@@ -157,6 +158,13 @@ export async function render(contenedor) {
     dibujarCliente();
     await dibujarCaja();
     limpiarBusqueda();
+
+    try {
+      const detalle = await api.get(`/ventas/${venta.venta_id}`);
+      imprimir(ticketHtml(detalle));
+    } catch (err) {
+      aviso(`Venta ${venta.numero} registrada, pero no se pudo imprimir el ticket: ${err.message}`, 'error');
+    }
   }
 
   function cobrarContado() {
@@ -167,7 +175,7 @@ export async function render(contenedor) {
         { valor: 'efectivo', texto: 'Efectivo' }, { valor: 'transferencia', texto: 'Transferencia' },
         { valor: 'tarjeta', texto: 'Tarjeta' }, { valor: 'mixto', texto: 'Mixto' },
       ] },
-      { campo: 'recibido', titulo: 'Recibido', tipo: 'number', valor: t.total },
+      { campo: 'recibido', titulo: 'Recibido en efectivo', tipo: 'number', valor: t.total },
       { campo: 'con_factura', titulo: 'Emitir factura legal', tipo: 'checkbox' },
       { campo: 'observacion', titulo: 'Observación', ancho: 'completo' },
     ], { recibido: t.total });
@@ -184,8 +192,22 @@ export async function render(contenedor) {
         clase: 'primario',
         accion: async (cerrar) => {
           const v = form.valores();
+          const recibido = Number(v.recibido || 0);
+          if (v.medio_pago === 'efectivo' && recibido < t.total) {
+            return aviso(`El efectivo recibido no alcanza: faltan ${gs(t.total - recibido)}`, 'error');
+          }
+          if (v.medio_pago === 'mixto' && (recibido <= 0 || recibido > t.total)) {
+            return aviso('En un pago mixto indicá cuánto se cobra en efectivo (entre 1 y el total)', 'error');
+          }
           try {
-            await confirmarVenta({ condicion: 'contado', medio_pago: v.medio_pago, con_factura: !!v.con_factura, observacion: v.observacion });
+            await confirmarVenta({
+              condicion: 'contado',
+              medio_pago: v.medio_pago,
+              recibido: v.medio_pago === 'efectivo' ? recibido : null,
+              monto_efectivo: v.medio_pago === 'mixto' ? recibido : null,
+              con_factura: !!v.con_factura,
+              observacion: v.observacion,
+            });
             cerrar();
           } catch (err) { aviso(err.message, 'error'); }
         },

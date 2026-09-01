@@ -372,3 +372,106 @@ test('sin sesion la API responde 401', async () => {
   assert.equal(r.estado, 401);
   cookie = guardada;
 });
+
+test('el precio lo pone el catalogo, no el cliente', async () => {
+  const producto = await api('GET', `/api/catalogo/productos/${productoId}`);
+  const lata = producto.datos.presentaciones.find((p) => p.factor === 1);
+  const r = await api('POST', '/api/ventas', {
+    condicion: 'contado',
+    items: [{ presentacion_id: presLata, cantidad: 1, precio_unitario: 1 }],
+  });
+  assert.equal(r.estado, 201);
+  assert.equal(r.datos.total, Number(lata.precio));
+});
+
+test('repetir la misma linea en una devolucion no permite devolver de mas', async () => {
+  const venta = await api('POST', '/api/ventas', {
+    condicion: 'contado', items: [{ presentacion_id: presPack, cantidad: 1 }],
+  });
+  const detalle = await api('GET', `/api/ventas/${venta.datos.venta_id}`);
+  const itemId = detalle.datos.items[0].id;
+  const stockAntes = (await api('GET', `/api/catalogo/productos/${productoId}`)).datos.stock;
+
+  const doble = await api('POST', `/api/ventas/${venta.datos.venta_id}/devoluciones`, {
+    items: [{ venta_item_id: itemId, cantidad: 1 }, { venta_item_id: itemId, cantidad: 1 }],
+  });
+  assert.equal(doble.estado, 400);
+  const stockDespues = (await api('GET', `/api/catalogo/productos/${productoId}`)).datos.stock;
+  assert.equal(stockDespues, stockAntes, 'la devolucion rechazada no repone nada');
+});
+
+test('la devolucion respeta el descuento de la venta', async () => {
+  const venta = await api('POST', '/api/ventas', {
+    condicion: 'contado', descuento: 5000, items: [{ presentacion_id: presPack, cantidad: 1 }],
+  });
+  const detalle = await api('GET', `/api/ventas/${venta.datos.venta_id}`);
+  const dev = await api('POST', `/api/ventas/${venta.datos.venta_id}/devoluciones`, {
+    items: [{ venta_item_id: detalle.datos.items[0].id, cantidad: 1 }],
+  });
+  assert.equal(dev.estado, 201);
+  assert.equal(dev.datos.total, Number(venta.datos.total), 'se devuelve lo que el cliente pago, no el precio de lista');
+});
+
+test('un ajuste sin cantidad no borra el stock', async () => {
+  const antes = (await api('GET', `/api/catalogo/productos/${productoId}`)).datos.stock;
+  const r = await api('POST', '/api/stock/ajustes', { producto_id: productoId, cantidad_final: null });
+  assert.equal(r.estado, 400);
+  const despues = (await api('GET', `/api/catalogo/productos/${productoId}`)).datos.stock;
+  assert.equal(despues, antes);
+});
+
+test('un pago mixto sin declarar el efectivo se rechaza', async () => {
+  const r = await api('POST', '/api/ventas', {
+    condicion: 'contado', medio_pago: 'mixto', items: [{ presentacion_id: presLata, cantidad: 1 }],
+  });
+  assert.equal(r.estado, 400);
+  assert.match(r.datos.error, /efectivo/);
+});
+
+test('devolver una venta con tarjeta no saca plata de la caja', async () => {
+  const caja = await api('POST', '/api/caja/abrir', { fondo_inicial: 20000 });
+  assert.equal(caja.estado, 201);
+  const venta = await api('POST', '/api/ventas', {
+    condicion: 'contado', medio_pago: 'tarjeta', items: [{ presentacion_id: presLata, cantidad: 1 }],
+  });
+  const esperadoAntes = (await api('GET', '/api/caja/actual')).datos.esperado_actual;
+  assert.equal(esperadoAntes, 20000, 'la venta con tarjeta no entra a la caja');
+
+  await api('POST', `/api/ventas/${venta.datos.venta_id}/anular`, { motivo: 'tarjeta' });
+  const esperadoDespues = (await api('GET', '/api/caja/actual')).datos.esperado_actual;
+  assert.equal(esperadoDespues, 20000, 'la devolucion vuelve por tarjeta, no por caja');
+  await api('POST', `/api/caja/${caja.datos.id}/cerrar`, { contado: 20000 });
+});
+
+test('los menus tambien se aplican en la API, no solo en el menu lateral', async () => {
+  await api('POST', '/api/usuarios', {
+    usuario: 'solopos', nombre: 'Solo Mostrador', rol: 'vendedor', password: 'clave123', menus: ['pos'],
+  });
+  const cookieAdmin = cookie;
+  await api('POST', '/api/auth/login', { usuario: 'solopos', password: 'clave123' });
+
+  const compras = await api('GET', '/api/compras');
+  assert.equal(compras.estado, 403);
+  const gastos = await api('GET', '/api/gastos');
+  assert.equal(gastos.estado, 403);
+  const buscar = await api('GET', '/api/catalogo/buscar?q=L1');
+  assert.equal(buscar.estado, 200, 'el mostrador sigue pudiendo buscar productos');
+  cookie = cookieAdmin;
+});
+
+test('una mutacion desde otro origen se rechaza', async () => {
+  const res = await fetch(`${base}/api/clientes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: cookie, Origin: 'https://sitio-atacante.example' },
+    body: JSON.stringify({ nombre: 'CSRF' }),
+  });
+  assert.equal(res.status, 403);
+});
+
+test('el backup es POST de admin y no una simple navegacion', async () => {
+  const porGet = await api('GET', '/api/config/backup');
+  assert.equal(porGet.estado, 404);
+  const r = await api('POST', '/api/config/backup');
+  assert.equal(r.estado, 200);
+  assert.ok(r.datos.tablas.productos.length > 0);
+});

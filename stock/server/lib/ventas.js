@@ -22,11 +22,9 @@ async function resolverItems(conn, items, { bloquear = true } = {}) {
     if (!presRows.length) throw malPedido('Presentacion inexistente en una linea');
     const presentacion = presRows[0];
     productoIds.push(presentacion.producto_id);
-    resueltos.push({
-      presentacion,
-      cantidad,
-      precio_unitario: item.precio_unitario === undefined ? Number(presentacion.precio) : gs(item.precio_unitario),
-    });
+    // El precio lo pone el catalogo, nunca el cliente: el unico ajuste posible
+    // es el descuento de la venta, que se valida aparte.
+    resueltos.push({ presentacion, cantidad, precio_unitario: gs(presentacion.precio) });
   }
 
   const productos = bloquear
@@ -71,6 +69,19 @@ async function resolverItems(conn, items, { bloquear = true } = {}) {
   return { lineas, productos, porProducto };
 }
 
+// Parte de la venta que entra en efectivo a la caja. Con medio mixto hay que
+// declarar cuanto se paga en efectivo, si no la caja quedaria corta.
+function porcionEfectivo(medioPago, montoEfectivo, cobrado) {
+  if (cobrado <= 0) return 0;
+  if (medioPago === 'efectivo') return cobrado;
+  if (medioPago !== 'mixto') return 0;
+  const efectivo = gs(montoEfectivo);
+  if (!(efectivo > 0) || efectivo > cobrado) {
+    throw malPedido('En un pago mixto hay que declarar el efectivo cobrado (mayor a cero y no mayor al total)');
+  }
+  return efectivo;
+}
+
 function totales(lineas, descuento = 0) {
   const subtotal = lineas.reduce((acc, l) => acc + l.importe, 0);
   const desc = Math.min(gs(descuento), subtotal);
@@ -89,6 +100,8 @@ async function crear(conn, datos, usuario) {
     cuotas: cantidadCuotas = 1,
     frecuencia = null,
     medio_pago = 'efectivo',
+    monto_efectivo = null,
+    recibido = null,
     con_factura = false,
     observacion = null,
     caja_id = null,
@@ -117,6 +130,12 @@ async function crear(conn, datos, usuario) {
     if (financiado > 0) await cuenta.verificarLimite(conn, cliente_id, financiado);
   } else {
     entrega = total;
+  }
+
+  const cobrado = condicion === 'contado' ? gs(total) : entrega;
+  const efectivoCaja = porcionEfectivo(medio_pago, monto_efectivo, cobrado);
+  if (medio_pago === 'efectivo' && recibido !== null && recibido !== undefined && gs(recibido) < cobrado) {
+    throw malPedido('El efectivo recibido no alcanza para cubrir el cobro');
   }
 
   const [maxRow] = await conn.query('SELECT COALESCE(MAX(numero), 0) + 1 AS siguiente FROM ventas');
@@ -192,22 +211,19 @@ async function crear(conn, datos, usuario) {
   }
 
   // Caja: entra el efectivo de la venta de contado y la entrega inicial del credito.
-  if (caja_id && medio_pago === 'efectivo') {
-    const enCaja = condicion === 'contado' ? gs(total) : entrega;
-    if (enCaja > 0) {
-      await conn.query(
-        `INSERT INTO caja_movimientos (caja_id, tipo, monto, referencia_tipo, referencia_id, detalle, usuario_id)
-         VALUES (?, ?, ?, 'venta', ?, ?, ?)`,
-        [
-          caja_id,
-          condicion === 'contado' ? 'venta' : 'entrega_inicial',
-          enCaja,
-          ventaId,
-          `Venta ${numero}`,
-          usuario.id,
-        ]
-      );
-    }
+  if (caja_id && efectivoCaja > 0) {
+    await conn.query(
+      `INSERT INTO caja_movimientos (caja_id, tipo, monto, referencia_tipo, referencia_id, detalle, usuario_id)
+       VALUES (?, ?, ?, 'venta', ?, ?, ?)`,
+      [
+        caja_id,
+        condicion === 'contado' ? 'venta' : 'entrega_inicial',
+        efectivoCaja,
+        ventaId,
+        `Venta ${numero}`,
+        usuario.id,
+      ]
+    );
   }
 
   if (con_factura) {

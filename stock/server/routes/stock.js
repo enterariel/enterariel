@@ -56,12 +56,16 @@ router.post(
   soloAdmin,
   asyncRuta(async (req, res) => {
     const { producto_id, cantidad_final, motivo = 'Ajuste manual' } = req.body || {};
-    if (!producto_id || cantidad_final === undefined) throw malPedido('Producto y cantidad final son obligatorios');
+    const cantidadFinal = Number(cantidad_final);
+    if (!producto_id || cantidad_final === undefined || cantidad_final === null || cantidad_final === ''
+        || !Number.isFinite(cantidadFinal) || cantidadFinal < 0) {
+      throw malPedido('Producto y cantidad final valida son obligatorios');
+    }
 
     const resultado = await db.transaccion(async (conn) => {
       const productos = await stockLib.bloquear(conn, [producto_id]);
       const producto = productos.get(Number(producto_id));
-      const delta = Math.trunc(Number(cantidad_final)) - Number(producto.stock);
+      const delta = Math.trunc(cantidadFinal) - Number(producto.stock);
       if (delta === 0) return { sin_cambios: true, stock: Number(producto.stock) };
       const mov = await stockLib.aplicar(conn, {
         productoId: producto.id,

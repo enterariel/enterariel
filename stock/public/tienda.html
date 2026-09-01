@@ -21,6 +21,17 @@
     const mensaje = document.getElementById('mensaje');
     let whatsapp = '';
 
+    // Solo se muestran fotos servidas por http(s): un `javascript:` u otro
+    // esquema cargado desde el catalogo no debe llegar al navegador del cliente.
+    function fotoSegura(url) {
+      try {
+        const destino = new URL(url, window.location.origin);
+        return destino.protocol === 'http:' || destino.protocol === 'https:' ? destino.href : null;
+      } catch {
+        return null;
+      }
+    }
+
     async function cargar(q = '') {
       grilla.textContent = '';
       let datos;
@@ -39,7 +50,7 @@
         : 'No hay productos publicados por ahora.';
       for (const p of datos.productos) {
         grilla.appendChild(el('article', { class: 'tienda-item' }, [
-          p.foto_url ? el('img', { src: p.foto_url, alt: p.nombre }) : null,
+          fotoSegura(p.foto_url) ? el('img', { src: fotoSegura(p.foto_url), alt: p.nombre }) : null,
           el('h3', { text: p.nombre }),
           el('small', { text: p.categoria || '' }),
           el('ul', {}, (p.presentaciones || []).map((pr) =>
